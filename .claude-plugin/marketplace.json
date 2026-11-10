@@ -1,0 +1,14 @@
+{
+  "name": "gtrivedi88-work-hub",
+  "description": "Personal Claude Code workflows that complement existing documentation plugins",
+  "owner": {
+    "name": "Gaurav Trivedi"
+  },
+  "plugins": [
+    {
+      "name": "work-hub",
+      "source": "./plugins/work-hub",
+      "description": "Personalize Claude Code and triage work across Jira, GitLab, GitHub, Slack, and AEM"
+    }
+  ]
+}
