@@ -17,11 +17,11 @@ Or, if you have cloned this repository and want to test that checkout:
 claude --plugin-dir ./plugins/work-hub
 ```
 
-Start a **new Claude Code session** in any project after installation. Its SessionStart hook copies starter Markdown files into `~/.claude/work-hub/` and adds one `@work-hub/CLAUDE.md` import to `~/.claude/CLAUDE.md`. Existing files are never replaced. Updates to the plugin can add new starter files without erasing your edits. The files in `~/.claude` are yours, not part of the shared repository.
+Start a **new Claude Code session** in any project after installation. Its SessionStart hook copies starter Markdown files into `~/.claude/work-hub/` and adds one `@work-hub/CLAUDE.md` import to `~/.claude/CLAUDE.md`. Existing files are never replaced. Updates to the plugin can add new starter files without erasing your edits. The files in `~/.claude` are yours, not part of the shared repository. The hook does not create a credential file.
 
-## Configure credentials once
+## Use your existing `.env`
 
-The first session also creates `~/.claude/work-hub/.env` with empty keys and private file permissions. Fill only the services you use. Do this before the live work brief; Work Hub never asks for a token in chat. It can also read the active project `.env` and `~/.env` if those already hold the same keys. Process environment wins, then active project `.env`, then the Work Hub file, then `~/.env`. Never commit credential files.
+Work Hub reads the same `.env` locations as docs-tools: the active project’s `.env` and `~/.env`. The project file overrides the global file; process environment overrides both. Keep using the credentials you already configured for docs-orchestrator. Work Hub never asks for a token in chat. If your existing file is in one repository, start Claude Code in that repository; if you want those credentials available across projects, put them in `~/.env`. Never commit credential files. Work Hub no longer creates its own `.env`; for users of version 0.1.0, it accepts that legacy file only as a lower-priority fallback while they consolidate credentials.
 
 ```dotenv
 JIRA_URL=https://your-team.atlassian.net
@@ -32,7 +32,7 @@ GITLAB_TOKEN=...
 GITHUB_TOKEN=...
 ```
 
-`GITHUB_API_URL` is optional for GitHub Enterprise. Slack and AEM use the MCP servers already connected to Claude Code; Work Hub does not request their tokens.
+The example shows the supported keys; add only any missing keys to your **existing** file. `JIRA_URL` and `GITLAB_URL` tell Work Hub which hosts to query. `GITHUB_API_URL` is optional for GitHub Enterprise. Slack and AEM use the MCP servers already connected to Claude Code; Work Hub does not request their tokens.
 
 ## Use it in one Claude session
 
@@ -50,7 +50,7 @@ The bundled Python script reads assigned, watched, and reported Jira issues acro
 
 ## Upgrade and privacy
 
-`claude plugin marketplace update gtrivedi88-work-hub` refreshes the catalog; update the installed plugin through Claude Code's plugin manager. Your `~/.claude/work-hub` files and `.env` stay local. Work Hub stores the latest intake snapshot under `~/.claude/work-hub/cache/` with private permissions. Delete that cache file whenever you want. Review the repository code before installing, especially the SessionStart hook that writes to your home directory.
+`claude plugin marketplace update gtrivedi88-work-hub` refreshes the catalog; update the installed plugin through Claude Code's plugin manager. Your `~/.claude/work-hub` Markdown files and existing `.env` stay local. Work Hub stores the latest intake snapshot under `~/.claude/work-hub/cache/` with private permissions. Delete that cache file whenever you want. Review the repository code before installing, especially the SessionStart hook that writes to your home directory.
 
 ## Development
 

@@ -30,8 +30,7 @@ def test_main_init_smoke_and_no_overwrite():
             assert Path(result["profile_root"]).is_dir()
             assert (home / "persona.md").is_file()
             assert "@work-hub/CLAUDE.md" in (home.parent / "CLAUDE.md").read_text()
-            assert (home / ".env").stat().st_mode & 0o777 == 0o600
-            assert "JIRA_URL=" in (home / ".env").read_text()
+            assert not (home / ".env").exists()
             (home / "persona.md").write_text("# My changed preferences\n")
             workflow.initialize()
             assert (home / "persona.md").read_text() == "# My changed preferences\n"
@@ -91,6 +90,24 @@ def test_env_local_override_and_no_value_echo():
         assert "secret" not in json.dumps(
             {"configured_keys": sorted(k for k, v in config.items() if v)}
         )
+
+
+def test_existing_env_beats_legacy_work_hub_env():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        profile = root / "profile"
+        profile.mkdir()
+        (profile / ".env").write_text("JIRA_API_TOKEN=legacy-secret\n")
+        (root / ".env").write_text("JIRA_API_TOKEN=project-secret\n")
+        with (
+            patch.dict(
+                os.environ, {"PERSONAL_WORKFLOW_HOME": str(profile)}, clear=True
+            ),
+            patch.object(workflow.Path, "home", return_value=root / "other"),
+        ):
+            (root / "other").mkdir()
+            (root / "other/.env").write_text("JIRA_API_TOKEN=global-secret\n")
+            assert workflow.load_config(root)["JIRA_API_TOKEN"] == "project-secret"
 
 
 def test_brief_saves_private_snapshot_and_selects_live_ticket():

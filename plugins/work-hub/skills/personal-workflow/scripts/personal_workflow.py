@@ -2,7 +2,8 @@
 """Read-only cross-system work intake for the work-hub plugin.
 
 All commands emit JSON. Credentials are read as data from the active repository's
-.env, then ~/.claude/work-hub/.env, then ~/.env; process variables win. No command
+.env, then ~/.env; process variables win. A legacy Work Hub .env is a fallback
+for users of version 0.1.0. No command
 prints credential values or writes to Jira, GitLab, or GitHub.
 """
 
@@ -97,14 +98,8 @@ def parse_env_file(path: Path) -> dict[str, str]:
 
 
 def load_config(cwd: Path) -> dict[str, str]:
-    values = parse_env_file(Path.home() / ".env")
-    values.update(
-        {
-            key: value
-            for key, value in parse_env_file(profile_root() / ".env").items()
-            if value
-        }
-    )
+    values = parse_env_file(profile_root() / ".env")
+    values.update(parse_env_file(Path.home() / ".env"))
     values.update(parse_env_file(cwd / ".env"))
     values.update({key: value for key, value in os.environ.items() if key in ENV_KEYS})
     values.setdefault("GITHUB_API_URL", "https://api.github.com")
@@ -548,13 +543,6 @@ def initialize() -> dict:
             target.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
             os.chmod(target, 0o600)
             created.append(str(target))
-    env_target = root / ".env"
-    if not env_target.exists():
-        env_target.write_text(
-            (SKILL_ROOT / "defaults.env").read_text(encoding="utf-8"), encoding="utf-8"
-        )
-        os.chmod(env_target, 0o600)
-        created.append(str(env_target))
     global_contract = root.parent / "CLAUDE.md"
     import_line = "@work-hub/CLAUDE.md"
     global_contract.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
