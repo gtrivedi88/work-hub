@@ -40,7 +40,7 @@ The example shows the supported keys; add only any missing keys to your **existi
 /work-hub:personal-workflow
 ```
 
-Claude checks which sources are healthy, groups related signals, presents priorities with evidence and uncertainty, and asks you which task to take. Choose a live Jira issue. Work Hub then follows its linked issue graph through the installed Jira reader and starts `docs-tools:docs-orchestrator` in local draft mode. The orchestrator's location does not matter; Claude Code resolves its installed skill by name. The brief can still run if docs-tools is absent; the draft handoff will say what is missing.
+Claude checks which sources are healthy, groups related signals, presents priorities with evidence and uncertainty, and asks you which task to take. Choose a live Jira issue. Work Hub then follows its linked issue graph through the installed Jira reader and starts `docs-tools:docs-orchestrator` in local draft mode. Before the draft starts, the current Claude Code directory must be the documentation repository for that ticket. If you chose work from another repository, use `/cd <path-to-docs-repo>` inside the same session. The installed orchestrator ignores `--draft` when combined with `--docs-repo-path`, so Work Hub does not use that combination. The orchestrator's installation location does not matter; Claude Code resolves its installed skill by name. The brief can still run if docs-tools is absent; the draft handoff will say what is missing.
 
 Your normal corrections and clear preferences can update `persona.md`, a project file, a stage checklist, or memory through `/work-hub:personalize-workflow`. The plugin nudges this on corrections. The personal files are deliberately small and should evolve as you work.
 
