@@ -46,13 +46,17 @@ Claude checks which sources are healthy, groups related signals, presents priori
 
 Your normal corrections and clear preferences can update `persona.md`, a project file, a stage checklist, or memory through `/work-hub:personalize-workflow`. The plugin nudges this on corrections. The personal files are deliberately small and should evolve as you work.
 
+### Next-day continuity
+
+When you choose a Jira issue, Work Hub records its key and local workflow stage in `~/.claude/work-hub/cache/tracked-jira.json`. The next brief rechecks that issue directly in Jira, even if it no longer appears in an open-work query. It can report that Jira is now in the Done category, while keeping the local draft stage separate. It also compares the new intake snapshot with `cache/latest-snapshot.json` and reports newly visible work, status changes, and items no longer visible. It makes those comparisons only for sources with complete coverage in both runs; a capped or failed query cannot prove that something appeared or disappeared. The first run establishes the baseline. Both cache files remain local and private; Work Hub does not update Jira to mark work complete.
+
 ## What it collects
 
 The bundled Python script reads assigned, watched, and reported Jira issues across projects; GitLab assigned and review MRs, issues, and pending to-dos; and GitHub assigned, mentioned, created, and review-requested issues and PRs. It checks authentication before reporting an empty source, caps each query, and labels incomplete coverage. It does not write to these services. Claude may add Slack and AEM context through installed MCP connections. Its score is a clue; Claude's final triage distinguishes urgency, impact, dependencies, and ease of the next action.
 
 ## Upgrade and privacy
 
-`claude plugin marketplace update gtrivedi88-work-hub` refreshes the catalog; update the installed plugin through Claude Code's plugin manager. Your `~/.claude/work-hub` Markdown files and existing `.env` stay local. Work Hub stores the latest intake snapshot under `~/.claude/work-hub/cache/` with private permissions. Delete that cache file whenever you want. Review the repository code before installing, especially the SessionStart hook that writes to your home directory.
+`claude plugin marketplace update gtrivedi88-work-hub` refreshes the catalog; update the installed plugin through Claude Code's plugin manager. Your `~/.claude/work-hub` Markdown files and existing `.env` stay local. Work Hub stores the latest intake snapshot and selected Jira tracking under `~/.claude/work-hub/cache/` with private permissions. Delete either cache file whenever you want to reset that history. Review the repository code before installing, especially the SessionStart hook that writes to your home directory.
 
 ## Development
 

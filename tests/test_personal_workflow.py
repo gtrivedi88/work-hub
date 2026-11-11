@@ -142,15 +142,24 @@ def test_config_reports_stale_process_override_without_value():
             patch.object(workflow.Path, "home", return_value=home),
             patch.dict(
                 os.environ,
-                {"JIRA_API_TOKEN": "old-secret", "PERSONAL_WORKFLOW_HOME": str(root / "profile")},
+                {
+                    "JIRA_API_TOKEN": "old-secret",
+                    "PERSONAL_WORKFLOW_HOME": str(root / "profile"),
+                },
                 clear=True,
             ),
         ):
             config = workflow.load_config(root)
             diagnostics = workflow.config_diagnostics(root)
         assert config["JIRA_API_TOKEN"] == "old-secret"
-        assert diagnostics["key_sources"]["JIRA_API_TOKEN"]["scope"] == "process_environment"
-        assert any("JIRA_API_TOKEN" in warning and "restart" in warning for warning in diagnostics["warnings"])
+        assert (
+            diagnostics["key_sources"]["JIRA_API_TOKEN"]["scope"]
+            == "process_environment"
+        )
+        assert any(
+            "JIRA_API_TOKEN" in warning and "restart" in warning
+            for warning in diagnostics["warnings"]
+        )
         assert "secret" not in json.dumps(diagnostics)
 
 
@@ -161,14 +170,20 @@ def test_config_reports_exact_setup_location_when_no_env_file():
         home.mkdir()
         with (
             patch.object(workflow.Path, "home", return_value=home),
-            patch.dict(os.environ, {"PERSONAL_WORKFLOW_HOME": str(root / "profile")}, clear=True),
+            patch.dict(
+                os.environ,
+                {"PERSONAL_WORKFLOW_HOME": str(root / "profile")},
+                clear=True,
+            ),
         ):
             diagnostics = workflow.config_diagnostics(root)
         assert diagnostics["files_read"] == []
         assert diagnostics["setup"]["recommended_file"] == str(home / ".env")
         assert diagnostics["setup"]["alternative_file"] == str(root / ".env")
         assert diagnostics["setup"]["keys_by_source"]["jira"] == [
-            "JIRA_URL", "JIRA_EMAIL", "JIRA_API_TOKEN"
+            "JIRA_URL",
+            "JIRA_EMAIL",
+            "JIRA_API_TOKEN",
         ]
 
 
@@ -226,6 +241,113 @@ def test_brief_saves_private_snapshot_and_selects_live_ticket():
         assert plan["skill"] == "docs-tools:docs-orchestrator"
         assert plan["args"][-1] == "--draft"
         assert "https://gitlab.example.org/mr/4" in plan["args"]
+
+
+def test_next_brief_remembers_selected_issue_and_verifies_jira_completion():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        issue = {
+            "id": "jira:DOCS-12",
+            "source": "jira",
+            "key": "DOCS-12",
+            "title": "Update docs",
+            "url": "https://jira.example.org/browse/DOCS-12",
+            "status": "In Progress",
+            "status_category": "indeterminate",
+            "signals": ["assigned"],
+        }
+        first = {
+            "collected_at": "2026-11-10T12:00:00+00:00",
+            "source_status": {"jira": {"state": "ok"}},
+            "items": [issue],
+        }
+        second = {
+            "collected_at": "2026-11-11T12:00:00+00:00",
+            "source_status": {"jira": {"state": "ok"}},
+            "items": [],
+        }
+        for snapshot in (first, second):
+            snapshot["triage_hints"] = workflow.triage_hints(snapshot)
+        with (
+            patch.dict(os.environ, {"PERSONAL_WORKFLOW_HOME": str(root / "profile")}),
+            patch.object(
+                workflow,
+                "load_config",
+                return_value={
+                    "JIRA_URL": "https://jira.example.org",
+                    "JIRA_EMAIL": "writer@example.org",
+                    "JIRA_API_TOKEN": "test-token",
+                },
+            ),
+            patch.object(workflow, "config_diagnostics", return_value={}),
+            patch.object(workflow, "collect", side_effect=[first, second]),
+            patch.object(
+                workflow,
+                "request_json",
+                return_value={
+                    "fields": {
+                        "status": {"name": "Done", "statusCategory": {"key": "done"}},
+                        "updated": "2026-11-11T08:00:00+00:00",
+                    }
+                },
+            ) as request,
+        ):
+            initial = workflow.make_brief(root, 10)
+            assert initial["changes_since_previous"]["previous_snapshot_at"] is None
+            workflow.select_ticket("DOCS-12")
+            workflow.record_progress("DOCS-12", "draft_result")
+            next_day = workflow.make_brief(root, 10)
+            tracked_file = workflow.tracked_path()
+            assert tracked_file.stat().st_mode & 0o777 == 0o600
+        assert (
+            next_day["changes_since_previous"]["no_longer_visible"][0]["id"]
+            == "jira:DOCS-12"
+        )
+        tracked = next_day["tracked_jira_work"][0]
+        assert tracked["local_stage"] == "draft_result"
+        assert tracked["completion"] == "jira_done"
+        assert tracked["newly_completed"] is True
+        assert request.call_args.args[0].endswith(
+            "/rest/api/3/issue/DOCS-12?fields=summary,status,updated"
+        )
+
+
+def test_disappearance_or_failed_coverage_does_not_prove_completion():
+    previous = {
+        "collected_at": "2026-11-10T12:00:00+00:00",
+        "source_status": {"jira": {"state": "ok"}},
+        "items": [{"id": "jira:DOCS-12", "source": "jira", "title": "Update docs"}],
+    }
+    current = {
+        "collected_at": "2026-11-11T12:00:00+00:00",
+        "source_status": {"jira": {"state": "partial"}},
+        "items": [],
+    }
+    changes = workflow.snapshot_changes(previous, current)
+    assert changes["no_longer_visible"] == []
+    assert "jira" in changes["incomparable_sources"]
+    tracked = {
+        "DOCS-12": {
+            "url": "https://jira.example.org/browse/DOCS-12",
+            "selected_at": "2026-11-10T12:00:00+00:00",
+            "local_stage": "draft_result",
+        }
+    }
+    with patch.object(
+        workflow,
+        "request_json",
+        side_effect=workflow.IntakeError("HTTP 403 for /rest/api/3/issue/DOCS-12"),
+    ):
+        rows = workflow.tracked_jira_status(
+            {
+                "JIRA_URL": "https://jira.example.org",
+                "JIRA_EMAIL": "writer@example.org",
+                "JIRA_API_TOKEN": "test-token",
+            },
+            tracked,
+        )
+    assert rows[0]["jira_verification"] == "unavailable"
+    assert "completion" not in rows[0]
 
 
 def test_main_brief_smoke_with_mocked_collection():

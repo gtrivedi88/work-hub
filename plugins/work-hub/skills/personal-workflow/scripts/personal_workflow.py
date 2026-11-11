@@ -265,6 +265,9 @@ def normalize_jira(row: dict, base: str) -> dict:
         "title": fields.get("summary") or "(no title)",
         "url": f"{base}/browse/{key}",
         "status": (fields.get("status") or {}).get("name"),
+        "status_category": (
+            (fields.get("status") or {}).get("statusCategory") or {}
+        ).get("key"),
         "priority": (fields.get("priority") or {}).get("name"),
         "updated": fields.get("updated"),
         "due_date": fields.get("duedate"),
@@ -650,10 +653,168 @@ def snapshot_path() -> Path:
     return profile_root() / "cache/latest-snapshot.json"
 
 
+def tracked_path() -> Path:
+    return profile_root() / "cache/tracked-jira.json"
+
+
+def read_private_json(path: Path, default: dict) -> dict:
+    if not path.is_file():
+        return default
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+    return value if isinstance(value, dict) else default
+
+
+def now_utc() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+
+
+def item_summary(item: dict) -> dict:
+    return {
+        "id": item.get("id"),
+        "title": item.get("title"),
+        "url": item.get("url"),
+        "status": item.get("status"),
+    }
+
+
+def snapshot_changes(previous: dict, current: dict) -> dict:
+    """Compare only sources whose two runs had complete coverage."""
+    display_limit = 50
+    result = {
+        "previous_snapshot_at": previous.get("collected_at"),
+        "display_limit": display_limit,
+        "new_items_count": 0,
+        "new_items": [],
+        "no_longer_visible_count": 0,
+        "no_longer_visible": [],
+        "status_changes_count": 0,
+        "status_changes": [],
+        "incomparable_sources": [],
+    }
+    if not previous.get("collected_at"):
+        result["note"] = "First snapshot; this run establishes the comparison baseline."
+        return result
+    old_status = previous.get("source_status") or {}
+    new_status = current.get("source_status") or {}
+    comparable = set()
+    for source in ("jira", "gitlab", "github"):
+        if (old_status.get(source) or {}).get("state") == "ok" and (
+            new_status.get(source) or {}
+        ).get("state") == "ok":
+            comparable.add(source)
+        else:
+            result["incomparable_sources"].append(source)
+    old = {
+        item["id"]: item
+        for item in previous.get("items", [])
+        if item.get("source") in comparable and item.get("id")
+    }
+    new = {
+        item["id"]: item
+        for item in current.get("items", [])
+        if item.get("source") in comparable and item.get("id")
+    }
+    new_ids = sorted(new.keys() - old.keys())
+    missing_ids = sorted(old.keys() - new.keys())
+    result["new_items_count"] = len(new_ids)
+    result["no_longer_visible_count"] = len(missing_ids)
+    result["new_items"] = [item_summary(new[key]) for key in new_ids[:display_limit]]
+    result["no_longer_visible"] = [
+        item_summary(old[key]) for key in missing_ids[:display_limit]
+    ]
+    for key in sorted(old.keys() & new.keys()):
+        if old[key].get("status") != new[key].get("status"):
+            result["status_changes_count"] += 1
+            if len(result["status_changes"]) < display_limit:
+                result["status_changes"].append(
+                    {
+                        **item_summary(new[key]),
+                        "previous_status": old[key].get("status"),
+                    }
+                )
+    return result
+
+
+def tracked_jira_status(config: dict[str, str], tracked: dict) -> list[dict]:
+    """Recheck chosen Jira issues, including ones absent from open-work queries."""
+    rows = []
+    base = (config.get("JIRA_URL") or "").rstrip("/")
+    authenticated = bool(
+        base
+        and config.get("JIRA_EMAIL")
+        and (config.get("JIRA_API_TOKEN") or config.get("JIRA_AUTH_TOKEN"))
+    )
+    valid = [
+        (key, saved)
+        for key, saved in tracked.items()
+        if isinstance(key, str) and KEY.fullmatch(key) and isinstance(saved, dict)
+    ]
+    for key, saved in sorted(
+        valid, key=lambda pair: pair[1].get("selected_at") or "", reverse=True
+    )[:25]:
+        item = {
+            "key": key,
+            "title": saved.get("title"),
+            "url": saved.get("url"),
+            "selected_at": saved.get("selected_at"),
+            "last_worked_at": saved.get("last_worked_at"),
+            "local_stage": saved.get("local_stage", "selected"),
+            "jira_verification": "unavailable",
+        }
+        selected_host = urllib.parse.urlsplit(saved.get("url") or "").netloc
+        if not authenticated or selected_host != urllib.parse.urlsplit(base).netloc:
+            item["reason"] = (
+                "Jira credentials unavailable or selected issue belongs to another Jira host"
+            )
+            rows.append(item)
+            continue
+        try:
+            issue = request_json(
+                f"{base}/rest/api/3/issue/{key}?fields=summary,status,updated",
+                jira_headers(config),
+            )
+            fields = issue.get("fields") or {}
+            status = fields.get("status") or {}
+            category = (status.get("statusCategory") or {}).get("key")
+            item.update(
+                {
+                    "jira_verification": "verified",
+                    "jira_status": status.get("name"),
+                    "jira_status_category": category,
+                    "jira_updated": fields.get("updated"),
+                    "completion": (
+                        "jira_done"
+                        if category == "done"
+                        else "jira_not_done"
+                        if category
+                        else "unknown"
+                    ),
+                    "newly_completed": category == "done"
+                    and saved.get("last_verified_category") not in (None, "done"),
+                }
+            )
+            saved["last_verified_category"] = category
+            saved["last_verified_status"] = status.get("name")
+            saved["last_verified_at"] = now_utc()
+        except IntakeError as exc:
+            item["reason"] = str(exc)
+        rows.append(item)
+    return rows
+
+
 def make_brief(cwd: Path, cap: int) -> dict:
     config = load_config(cwd)
+    previous = read_private_json(snapshot_path(), {})
     snapshot = collect(config, cap)
     diagnostics = config_diagnostics(cwd)
+    changes = snapshot_changes(previous, snapshot)
+    tracked = read_private_json(tracked_path(), {})
+    tracked_status = tracked_jira_status(config, tracked)
+    if tracked:
+        private_json(tracked_path(), tracked)
     path = snapshot_path()
     private_json(path, snapshot)
     by_id = {item["id"]: item for item in snapshot["items"]}
@@ -666,6 +827,8 @@ def make_brief(cwd: Path, cap: int) -> dict:
         "collected_at": snapshot["collected_at"],
         "total_items": len(snapshot["items"]),
         "source_status": snapshot["source_status"],
+        "changes_since_previous": changes,
+        "tracked_jira_work": tracked_status,
         "config": diagnostics,
         "candidate_items": candidates,
         "candidate_limit": 60,
@@ -689,6 +852,19 @@ def select_ticket(key: str) -> dict:
     )
     if issue is None:
         raise IntakeError("The selected Jira issue is not in the current work brief")
+    tracked = read_private_json(tracked_path(), {})
+    previous = tracked.get(key, {})
+    tracked[key] = {
+        **previous,
+        "title": issue.get("title"),
+        "url": issue.get("url"),
+        "selected_at": now_utc(),
+        "last_worked_at": now_utc(),
+        "local_stage": "selected",
+        "last_verified_category": issue.get("status_category"),
+        "last_verified_status": issue.get("status"),
+    }
+    private_json(tracked_path(), tracked)
     args = [key]
     links = []
     for item in snapshot["items"]:
@@ -709,7 +885,20 @@ def select_ticket(key: str) -> dict:
         "jira_graph_skill": "docs-tools:jira-reader",
         "jira_graph_args": ["--graph", key],
         "mode": "draft",
+        "tracked_at": str(tracked_path()),
     }
+
+
+def record_progress(key: str, stage: str) -> dict:
+    if not KEY.fullmatch(key):
+        raise IntakeError("Expected a Jira issue key such as PROJ-123")
+    tracked = read_private_json(tracked_path(), {})
+    if key not in tracked:
+        raise IntakeError("That Jira issue has not been selected in Work Hub")
+    tracked[key]["local_stage"] = stage
+    tracked[key]["last_worked_at"] = now_utc()
+    private_json(tracked_path(), tracked)
+    return {"key": key, "local_stage": stage, "tracked_at": str(tracked_path())}
 
 
 def memory_target(kind: str, name: str | None = None) -> dict:
@@ -750,6 +939,12 @@ def main(argv: list[str] | None = None) -> int:
     brief.add_argument("--cap", type=int, default=500)
     select = subparsers.add_parser("select")
     select.add_argument("key")
+    progress = subparsers.add_parser("progress")
+    progress.add_argument("key")
+    progress.add_argument(
+        "stage",
+        choices=["researching", "draft_started", "draft_result", "reviewed", "blocked"],
+    )
     target = subparsers.add_parser("target")
     target.add_argument(
         "kind", choices=["preference", "project", "checklist", "lesson", "candidate"]
@@ -767,6 +962,8 @@ def main(argv: list[str] | None = None) -> int:
             result = make_brief(Path.cwd(), args.cap)
         elif args.command == "select":
             result = select_ticket(args.key)
+        elif args.command == "progress":
+            result = record_progress(args.key, args.stage)
         else:
             result = memory_target(args.kind, args.name)
         print(json.dumps(result, indent=2, ensure_ascii=False))
