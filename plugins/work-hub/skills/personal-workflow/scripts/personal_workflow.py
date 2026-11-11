@@ -2,8 +2,8 @@
 """Read-only cross-system work intake for the work-hub plugin.
 
 All commands emit JSON. Credentials are read as data from the active repository's
-.env, then ~/.env; process variables win. A legacy Work Hub .env is a fallback
-for users of version 0.1.0. No command
+.env and ~/.env; process variables win, matching docs-tools. A legacy Work Hub
+.env is a fallback for users of version 0.1.0. No command
 prints credential values or writes to Jira, GitLab, or GitHub.
 """
 
@@ -106,25 +106,53 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return parsed
 
 
-def load_config(cwd: Path) -> dict[str, str]:
-    values = parse_env_file(profile_root() / ".env")
-    values.update(parse_env_file(Path.home() / ".env"))
-    values.update(parse_env_file(cwd / ".env"))
-    values.update(
-        {key: value for key, value in os.environ.items() if key in ENV_KEYS and value}
+def config_paths(cwd: Path) -> tuple[tuple[str, Path], ...]:
+    return (
+        ("legacy_work_hub", profile_root() / ".env"),
+        ("global", Path.home() / ".env"),
+        ("active_directory", cwd / ".env"),
     )
-    values.setdefault("GITHUB_API_URL", "https://api.github.com")
-    return values
+
+
+def resolved_config(cwd: Path) -> tuple[dict[str, str], dict[str, dict], list[str]]:
+    """Resolve values and safe provenance without exposing credentials."""
+    values: dict[str, str] = {}
+    sources: dict[str, dict] = {}
+    warnings: list[str] = []
+    for scope, path in config_paths(cwd):
+        for key, value in parse_env_file(path).items():
+            values[key] = value
+            sources[key] = {"scope": scope, "path": str(path)}
+    for key in sorted(ENV_KEYS):
+        value = os.environ.get(key)
+        if not value:
+            continue
+        file_source = sources.get(key)
+        matches_file = key in values and values[key] == value
+        if key in values and values[key] != value:
+            warnings.append(
+                f"{key} from the inherited process environment overrides "
+                f"{sources[key]['path']}; restart the terminal and Claude Code "
+                "after updating that .env file"
+            )
+        values[key] = value
+        sources[key] = {"scope": "process_environment"}
+        if matches_file and file_source and file_source.get("path"):
+            sources[key]["matches_file"] = file_source["path"]
+    if not values.get("GITHUB_API_URL"):
+        values["GITHUB_API_URL"] = "https://api.github.com"
+        sources["GITHUB_API_URL"] = {"scope": "default"}
+    return values, sources, warnings
+
+
+def load_config(cwd: Path) -> dict[str, str]:
+    return resolved_config(cwd)[0]
 
 
 def config_diagnostics(cwd: Path) -> dict:
     files = []
-    warnings = []
-    for label, path in (
-        ("legacy_work_hub", profile_root() / ".env"),
-        ("global", Path.home() / ".env"),
-        ("active_directory", cwd / ".env"),
-    ):
+    _, sources, warnings = resolved_config(cwd)
+    for label, path in config_paths(cwd):
         if not path.is_file():
             continue
         files.append({"scope": label, "path": str(path)})
@@ -136,7 +164,27 @@ def config_diagnostics(cwd: Path) -> dict:
                     f"use {LEGACY_KEYS[match.group(1)]}= in this same file "
                     "for docs-tools compatibility"
                 )
-    return {"files_read": files, "warnings": warnings}
+    global_file = Path.home() / ".env"
+    project_file = cwd / ".env"
+    setup = None
+    if not any(f["scope"] in ("global", "active_directory") for f in files):
+        setup = {
+            "message": "No docs-tools-compatible .env found. Create the global file for use across projects, or the active project's file for project-only use.",
+            "recommended_file": str(global_file),
+            "alternative_file": str(project_file),
+            "format": "KEY=value",
+            "keys_by_source": {
+                "jira": ["JIRA_URL", "JIRA_EMAIL", "JIRA_API_TOKEN"],
+                "gitlab": ["GITLAB_URL", "GITLAB_TOKEN"],
+                "github": ["GITHUB_TOKEN"],
+            },
+        }
+    return {
+        "files_read": files,
+        "key_sources": {key: sources[key] for key in sorted(sources)},
+        "warnings": warnings,
+        "setup": setup,
+    }
 
 
 def request_json(url: str, headers: dict[str, str], *, data: dict | None = None):
@@ -697,6 +745,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("init")
+    subparsers.add_parser("config")
     brief = subparsers.add_parser("brief")
     brief.add_argument("--cap", type=int, default=500)
     select = subparsers.add_parser("select")
@@ -710,6 +759,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "init":
             result = initialize()
+        elif args.command == "config":
+            result = config_diagnostics(Path.cwd())
         elif args.command == "brief":
             if args.cap < 1:
                 raise IntakeError("--cap must be positive")

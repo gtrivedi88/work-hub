@@ -21,7 +21,7 @@ Start a **new Claude Code session** in any project after installation. Its Sessi
 
 ## Use your existing `.env`
 
-Work Hub reads the same `.env` locations as docs-tools: the active project’s `.env` and `~/.env`. The project file overrides the global file; process environment overrides both. Keep using the credentials you already configured for docs-orchestrator. Work Hub never asks for a token in chat. If your existing file is in one repository, start Claude Code in that repository; if you want those credentials available across projects, put them in `~/.env`. Never commit credential files. Work Hub no longer creates its own `.env`; for users of version 0.1.0, it accepts that legacy file only as a lower-priority fallback while they consolidate credentials.
+Work Hub detects and reads the same `.env` locations as docs-tools: the active project’s `.env` and `~/.env`. Installing docs-orchestrator alone does not create a `.env`. The project file overrides the global file; process environment overrides both. Keep using the credentials you already configured for docs-orchestrator. Work Hub never asks for a token in chat. If your existing file is in one repository, start Claude Code in that repository; if you want those credentials available across projects, put them in `~/.env`. Never commit credential files. Work Hub no longer creates its own `.env`; for users of version 0.1.0, it accepts that legacy file only as a lower-priority fallback while they consolidate credentials.
 
 ```dotenv
 JIRA_URL=https://your-team.atlassian.net
@@ -32,9 +32,9 @@ GITLAB_TOKEN=...
 GITHUB_TOKEN=...
 ```
 
-The example shows the supported keys; add only any missing keys to your **existing** file. `JIRA_URL` and `GITLAB_URL` tell Work Hub which hosts to query. `GITHUB_API_URL` is optional for GitHub Enterprise. Slack and AEM use the MCP servers already connected to Claude Code; Work Hub does not request their tokens.
+The example shows the supported keys; add only any missing keys to your **existing** file. If neither file exists, create `~/.env` for use across projects, or `<project>/.env` for that project only. Use `KEY=value` assignments, protect the file with `chmod 600 ~/.env` (or the project path), and never commit it. `JIRA_URL` and `GITLAB_URL` tell Work Hub which hosts to query. `GITHUB_API_URL` is optional for GitHub Enterprise. Slack and AEM use the MCP servers already connected to Claude Code; Work Hub does not request their tokens.
 
-If an existing file uses `email:`, `jira_token:`, or `gitlab_token:` lines, Work Hub can read those as a legacy convenience and reports the file and line in its brief. Change them to `JIRA_EMAIL=`, `JIRA_API_TOKEN=`, and `GITLAB_TOKEN=` in that **same file** before invoking docs-orchestrator, because docs-tools expects standard `.env` assignments. The brief lists the credential file paths it checked, never their values.
+If an existing file uses `email:`, `jira_token:`, or `gitlab_token:` lines, Work Hub can read those as a legacy convenience and reports the file and line in its brief. Change them to `JIRA_EMAIL=`, `JIRA_API_TOKEN=`, and `GITLAB_TOKEN=` in that **same file** before invoking docs-orchestrator, because docs-tools expects standard `.env` assignments. Work Hub's `config` check reports each key's source and warns if an inherited process value overrides an updated file. Open a new terminal and Claude Code session after changing a shell-loaded `.env`; the existing session keeps its old environment. The report lists paths and key names, never credential values.
 
 ## Use it in one Claude session
 

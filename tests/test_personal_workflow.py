@@ -132,6 +132,60 @@ def test_legacy_colon_env_reports_syntax_without_revealing_values():
         assert "secret" not in json.dumps(diagnostics)
 
 
+def test_config_reports_stale_process_override_without_value():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        home = root / "home"
+        home.mkdir()
+        (home / ".env").write_text("JIRA_API_TOKEN=new-secret\n")
+        with (
+            patch.object(workflow.Path, "home", return_value=home),
+            patch.dict(
+                os.environ,
+                {"JIRA_API_TOKEN": "old-secret", "PERSONAL_WORKFLOW_HOME": str(root / "profile")},
+                clear=True,
+            ),
+        ):
+            config = workflow.load_config(root)
+            diagnostics = workflow.config_diagnostics(root)
+        assert config["JIRA_API_TOKEN"] == "old-secret"
+        assert diagnostics["key_sources"]["JIRA_API_TOKEN"]["scope"] == "process_environment"
+        assert any("JIRA_API_TOKEN" in warning and "restart" in warning for warning in diagnostics["warnings"])
+        assert "secret" not in json.dumps(diagnostics)
+
+
+def test_config_reports_exact_setup_location_when_no_env_file():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        home = root / "home"
+        home.mkdir()
+        with (
+            patch.object(workflow.Path, "home", return_value=home),
+            patch.dict(os.environ, {"PERSONAL_WORKFLOW_HOME": str(root / "profile")}, clear=True),
+        ):
+            diagnostics = workflow.config_diagnostics(root)
+        assert diagnostics["files_read"] == []
+        assert diagnostics["setup"]["recommended_file"] == str(home / ".env")
+        assert diagnostics["setup"]["alternative_file"] == str(root / ".env")
+        assert diagnostics["setup"]["keys_by_source"]["jira"] == [
+            "JIRA_URL", "JIRA_EMAIL", "JIRA_API_TOKEN"
+        ]
+
+
+def test_config_cli_emits_safe_diagnostics():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        with (
+            patch.object(workflow.Path, "home", return_value=root),
+            patch.object(workflow.Path, "cwd", return_value=root),
+            patch.dict(os.environ, {}, clear=True),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            assert workflow.main(["config"]) == 0
+        result = json.loads(output.getvalue())
+        assert result["setup"]["recommended_file"] == str(root / ".env")
+
+
 def test_brief_saves_private_snapshot_and_selects_live_ticket():
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
