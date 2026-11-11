@@ -35,6 +35,11 @@ ENV_KEYS = {
     "GITHUB_API_URL",
     "GITHUB_TOKEN",
 }
+LEGACY_KEYS = {
+    "email": "JIRA_EMAIL",
+    "jira_token": "JIRA_API_TOKEN",
+    "gitlab_token": "GITLAB_TOKEN",
+}
 JIRA_FIELDS = [
     "summary",
     "status",
@@ -75,6 +80,10 @@ def parse_env_file(path: Path) -> dict[str, str]:
             continue
         match = re.fullmatch(r"(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=\s*(.*)", line)
         if not match:
+            legacy = re.fullmatch(r"(email|jira_token|gitlab_token)\s*:\s*(.+)", line)
+            if legacy:
+                parsed.setdefault(LEGACY_KEYS[legacy.group(1)], legacy.group(2).strip())
+                continue
             if re.match(r"(?:export\s+)?(?:JIRA_|GITLAB_|GITHUB_)", line):
                 raise IntakeError(f"Invalid .env syntax in {path} at line {number}")
             continue
@@ -101,9 +110,33 @@ def load_config(cwd: Path) -> dict[str, str]:
     values = parse_env_file(profile_root() / ".env")
     values.update(parse_env_file(Path.home() / ".env"))
     values.update(parse_env_file(cwd / ".env"))
-    values.update({key: value for key, value in os.environ.items() if key in ENV_KEYS})
+    values.update(
+        {key: value for key, value in os.environ.items() if key in ENV_KEYS and value}
+    )
     values.setdefault("GITHUB_API_URL", "https://api.github.com")
     return values
+
+
+def config_diagnostics(cwd: Path) -> dict:
+    files = []
+    warnings = []
+    for label, path in (
+        ("legacy_work_hub", profile_root() / ".env"),
+        ("global", Path.home() / ".env"),
+        ("active_directory", cwd / ".env"),
+    ):
+        if not path.is_file():
+            continue
+        files.append({"scope": label, "path": str(path)})
+        for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            match = re.fullmatch(r"\s*(email|jira_token|gitlab_token)\s*:\s*(.+)", raw)
+            if match:
+                warnings.append(
+                    f"{path}:{number}: {match.group(1)}: is legacy syntax; "
+                    f"use {LEGACY_KEYS[match.group(1)]}= in this same file "
+                    "for docs-tools compatibility"
+                )
+    return {"files_read": files, "warnings": warnings}
 
 
 def request_json(url: str, headers: dict[str, str], *, data: dict | None = None):
@@ -570,7 +603,9 @@ def snapshot_path() -> Path:
 
 
 def make_brief(cwd: Path, cap: int) -> dict:
-    snapshot = collect(load_config(cwd), cap)
+    config = load_config(cwd)
+    snapshot = collect(config, cap)
+    diagnostics = config_diagnostics(cwd)
     path = snapshot_path()
     private_json(path, snapshot)
     by_id = {item["id"]: item for item in snapshot["items"]}
@@ -583,6 +618,7 @@ def make_brief(cwd: Path, cap: int) -> dict:
         "collected_at": snapshot["collected_at"],
         "total_items": len(snapshot["items"]),
         "source_status": snapshot["source_status"],
+        "config": diagnostics,
         "candidate_items": candidates,
         "candidate_limit": 60,
     }

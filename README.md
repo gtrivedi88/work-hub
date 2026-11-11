@@ -34,6 +34,8 @@ GITHUB_TOKEN=...
 
 The example shows the supported keys; add only any missing keys to your **existing** file. `JIRA_URL` and `GITLAB_URL` tell Work Hub which hosts to query. `GITHUB_API_URL` is optional for GitHub Enterprise. Slack and AEM use the MCP servers already connected to Claude Code; Work Hub does not request their tokens.
 
+If an existing file uses `email:`, `jira_token:`, or `gitlab_token:` lines, Work Hub can read those as a legacy convenience and reports the file and line in its brief. Change them to `JIRA_EMAIL=`, `JIRA_API_TOKEN=`, and `GITLAB_TOKEN=` in that **same file** before invoking docs-orchestrator, because docs-tools expects standard `.env` assignments. The brief lists the credential file paths it checked, never their values.
+
 ## Use it in one Claude session
 
 ```text

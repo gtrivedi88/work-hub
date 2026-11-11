@@ -110,6 +110,28 @@ def test_existing_env_beats_legacy_work_hub_env():
             assert workflow.load_config(root)["JIRA_API_TOKEN"] == "project-secret"
 
 
+def test_legacy_colon_env_reports_syntax_without_revealing_values():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / ".env").write_text(
+            "email: writer@example.org\n"
+            "jira_token: jira-secret\n"
+            "gitlab_token: gitlab-secret\n"
+        )
+        with (
+            patch.object(workflow.Path, "home", return_value=root / "other"),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            config = workflow.load_config(root)
+            diagnostics = workflow.config_diagnostics(root)
+        assert config["JIRA_EMAIL"] == "writer@example.org"
+        assert config["JIRA_API_TOKEN"] == "jira-secret"
+        assert config["GITLAB_TOKEN"] == "gitlab-secret"
+        assert diagnostics["files_read"][-1]["scope"] == "active_directory"
+        assert len(diagnostics["warnings"]) == 3
+        assert "secret" not in json.dumps(diagnostics)
+
+
 def test_brief_saves_private_snapshot_and_selects_live_ticket():
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
