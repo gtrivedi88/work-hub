@@ -6,6 +6,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -17,7 +18,16 @@ SCRIPT = (
 )
 SPEC = importlib.util.spec_from_file_location("personal_workflow", SCRIPT)
 workflow = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(workflow)
+sys.path.insert(0, str(SCRIPT.parent))
+try:
+    SPEC.loader.exec_module(workflow)
+finally:
+    sys.path.pop(0)
+
+
+JIRA = "https://jira.example.org"
+JIRA_SCOPE = workflow.memory.scope_id(JIRA, "writer")
+JIRA_SOURCE = {"state": "ok", "api_base": JIRA, "scope": JIRA_SCOPE}
 
 
 def test_main_init_smoke_and_no_overwrite():
@@ -206,7 +216,8 @@ def test_brief_saves_private_snapshot_and_selects_live_ticket():
         root = Path(directory)
         snapshot = {
             "collected_at": "2026-11-10T12:00:00+00:00",
-            "source_status": {"jira": {"state": "ok", "count": 1}},
+            "brief_id": "initial",
+            "source_status": {"jira": JIRA_SOURCE},
             "items": [
                 {
                     "id": "jira:DOCS-12",
@@ -240,7 +251,8 @@ def test_brief_saves_private_snapshot_and_selects_live_ticket():
             plan = workflow.select_ticket("DOCS-12")
         assert plan["skill"] == "docs-tools:docs-orchestrator"
         assert plan["args"][-1] == "--draft"
-        assert "https://gitlab.example.org/mr/4" in plan["args"]
+        assert plan["review_candidates"] == ["https://gitlab.example.org/mr/4"]
+    assert plan["args"] == ["DOCS-12", "--draft"]
 
 
 def test_next_brief_remembers_selected_issue_and_verifies_jira_completion():
@@ -258,12 +270,14 @@ def test_next_brief_remembers_selected_issue_and_verifies_jira_completion():
         }
         first = {
             "collected_at": "2026-11-10T12:00:00+00:00",
-            "source_status": {"jira": {"state": "ok"}},
+            "brief_id": "first",
+            "source_status": {"jira": JIRA_SOURCE},
             "items": [issue],
         }
         second = {
             "collected_at": "2026-11-11T12:00:00+00:00",
-            "source_status": {"jira": {"state": "ok"}},
+            "brief_id": "second",
+            "source_status": {"jira": JIRA_SOURCE},
             "items": [],
         }
         for snapshot in (first, second):
@@ -326,28 +340,22 @@ def test_disappearance_or_failed_coverage_does_not_prove_completion():
     changes = workflow.snapshot_changes(previous, current)
     assert changes["no_longer_visible"] == []
     assert "jira" in changes["incomparable_sources"]
-    tracked = {
-        "DOCS-12": {
-            "url": "https://jira.example.org/browse/DOCS-12",
-            "selected_at": "2026-11-10T12:00:00+00:00",
-            "local_stage": "draft_result",
-        }
-    }
     with patch.object(
         workflow,
         "request_json",
         side_effect=workflow.IntakeError("HTTP 403 for /rest/api/3/issue/DOCS-12"),
     ):
-        rows = workflow.tracked_jira_status(
+        status = workflow.jira_status(
             {
                 "JIRA_URL": "https://jira.example.org",
                 "JIRA_EMAIL": "writer@example.org",
                 "JIRA_API_TOKEN": "test-token",
             },
-            tracked,
+            JIRA,
+            "DOCS-12",
         )
-    assert rows[0]["jira_verification"] == "unavailable"
-    assert "completion" not in rows[0]
+    assert status["jira_verification"] == "unavailable"
+    assert "completion" not in status
 
 
 def test_main_brief_smoke_with_mocked_collection():
@@ -412,3 +420,177 @@ def test_session_hook_scaffolds_and_nudges_without_storing_prompt():
         )
         assert "Actually, use DITA" not in json.dumps(feedback)
         assert not run("stop", {"session_id": "one"}).stdout
+
+
+def test_work_history_cli_across_briefs_and_provider_failures(tmp_path, monkeypatch, capsys):
+    """Run the CLI through an implementation merge and a distinct docs outcome."""
+    monkeypatch.setenv("PERSONAL_WORKFLOW_HOME", str(tmp_path / "profile"))
+    config = {
+        "JIRA_URL": JIRA,
+        "JIRA_EMAIL": "writer@example.org",
+        "JIRA_API_TOKEN": "test-jira-token",
+        "GITHUB_API_URL": "https://api.github.com",
+        "GITHUB_TOKEN": "test-github-token",
+        "GITLAB_URL": "https://gitlab.example.org",
+        "GITLAB_TOKEN": "test-gitlab-token",
+    }
+    monkeypatch.setattr(workflow, "load_config", lambda cwd: config)
+    monkeypatch.setattr(workflow, "config_diagnostics", lambda cwd: {})
+    account = "writer"
+    phase = "open"
+    github_review = "https://github.com/acme/product/pull/17"
+    gitlab_review = "https://gitlab.example.org/acme/team/product/-/merge_requests/31"
+    requested = []
+
+    def request(url, headers, *, data=None):
+        requested.append(url)
+        if url == JIRA + "/rest/api/3/myself":
+            return {"accountId": account}
+        if url.startswith(JIRA + "/rest/api/3/search/jql"):
+            if phase in {"open", "alternate"}:
+                return {
+                    "issues": [
+                        {
+                            "key": key,
+                            "fields": {
+                                "summary": title,
+                                "status": {
+                                    "name": "In Progress",
+                                    "statusCategory": {"key": "indeterminate"},
+                                },
+                            },
+                        }
+                        for key, title in (
+                            ("DOCS-12", "Update upgrade docs"),
+                            ("DOCS-13", "Draft release notes"),
+                        )
+                    ]
+                }
+            return {"issues": []}
+        if url.startswith(JIRA + "/rest/api/3/issue/DOCS-12?"):
+            return {"fields": {"status": {"name": "Done", "statusCategory": {"key": "done"}}}}
+        if url.startswith(JIRA + "/rest/api/3/issue/ENG-31?"):
+            category = "done" if phase == "merged" else "indeterminate"
+            return {"fields": {"status": {"statusCategory": {"key": category}}}}
+        if url == "https://api.github.com/user":
+            return {"id": 11}
+        if url.startswith("https://api.github.com/issues?"):
+            return []
+        if url.startswith("https://api.github.com/search/issues?"):
+            return {"items": [], "total_count": 0}
+        if url == "https://api.github.com/repos/acme/product/pulls/17":
+            if phase == "unavailable":
+                raise workflow.IntakeError("HTTP 503 for review")
+            return {"state": "closed", "merged": phase == "merged"}
+        if url == "https://gitlab.example.org/api/v4/user":
+            return {"id": 12}
+        if url == "https://gitlab.example.org/api/v4/projects/acme%2Fteam%2Fproduct/merge_requests/31":
+            return {"state": "merged" if phase == "merged" else "opened"}
+        if url.startswith("https://gitlab.example.org/api/v4/"):
+            return []
+        raise AssertionError(url)
+
+    monkeypatch.setattr(workflow, "request_json", request)
+
+    def cli(*args, expected=0):
+        assert workflow.main(list(args)) == expected
+        return json.loads(capsys.readouterr().out)
+
+    first = cli("brief")
+    brief = ("--brief-id", first["brief_id"])
+    jira = "DOCS-12"
+    cli("recommend", jira, "--reason", "Release is approaching", *brief)
+    cli("recommend", "DOCS-13", "--reason", "Prepare the release notes", *brief)
+    cli("defer", "DOCS-13", "--reason", "Still waiting for engineering", *brief)
+    chosen = cli("select", jira, *brief)
+    work = ("--work-id", chosen["work_id"])
+    cli("progress", jira, "draft_result", "--next-action", "Verify flag names", *work)
+    cli("link", jira, github_review, *work, *brief)
+    cli("link", jira, gitlab_review, *work, *brief)
+    cli("link", jira, "https://other.example.org/acme/product/pull/17", *work, *brief, expected=1)
+    cli("wait", jira, "--reason", "Waiting for implementation", "--on", github_review,
+        "--check-on", "2000-01-01", *work)
+
+    phase = "closed"
+    closed = cli("brief")
+    assert closed["tracked_jira_work"][0]["waiting"]["dependency_status"] == "closed"
+    assert closed["tracked_jira_work"][0]["waiting"]["check_due"] is True
+    phase = "unavailable"
+    failed = cli("brief")
+    assert failed["tracked_jira_work"][0]["waiting"]["dependency_status"] == "unknown"
+    phase = "merged"
+    merged = cli("brief")
+    row = merged["tracked_jira_work"][0]
+    assert row["waiting"]["dependency_status"] == "ready"
+    assert row["review_status"] == {github_review: "merged", gitlab_review: "merged"}
+    assert row["completion"] == "jira_done"
+    assert row["local_stage"] == "draft_result"
+    assert row["next_action"] == "Verify flag names"
+    assert merged["recommendation_outcomes"] == {"drafted": 1, "deferred": 1}
+    assert cli("select", jira, *brief, expected=1)["error"].startswith("The brief was replaced")
+
+    resumed = cli("select", jira, "--brief-id", merged["brief_id"])
+    assert resumed["local_stage"] == "draft_result"
+    assert resumed["next_action"] == "Verify flag names"
+    assert set(resumed["linked_reviews"]) == {github_review, gitlab_review}
+    cli("wait", jira, "--on", "ENG-31", "--reason", "Check engineering ticket", *work)
+    assert cli("brief")["tracked_jira_work"][0]["waiting"]["dependency_status"] == "ready"
+    cli("clear-wait", jira, *work)
+    cli("outcome", jira, "published", "https://docs.example.org/upgrade", *work)
+    assert cli("brief")["recommendation_outcomes"] == {"published": 1, "deferred": 1}
+    history = cli("history", jira, *work)
+    assert history["waiting"] is None
+    assert sum(e["kind"] == "review_status" and e.get("status") == "merged"
+               for e in history["history"]) == 2
+    assert history["outcomes"]["published"]["url"] == "https://docs.example.org/upgrade"
+
+    phase = "alternate"
+    account = "different-writer"
+    alternate = cli("brief")
+    assert alternate["tracked_jira_work"] == []
+    assert alternate["recommendation_outcomes"] == {}
+    assert alternate["changes_since_previous"]["new_items"] == []
+    assert "jira" in alternate["changes_since_previous"]["incomparable_sources"]
+    other = cli("select", jira, "--brief-id", alternate["brief_id"])
+    assert other["work_id"] != chosen["work_id"]
+    assert other["next_action"] is None
+    assert any("/pulls/17" in url for url in requested)
+    assert workflow.tracked_path().stat().st_mode & 0o777 == 0o600
+
+
+def test_legacy_stage_imports_once_after_direct_verification(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERSONAL_WORKFLOW_HOME", str(tmp_path / "profile"))
+    scope = JIRA_SCOPE
+    key = "DOCS-12"
+    url = f"{JIRA}/browse/{key}"
+    workflow.private_json(workflow.tracked_path().with_name("tracked-jira.json"), {
+        key: {
+            "title": "Legacy ticket",
+            "url": url,
+            "selected_at": "2026-11-10T08:00:00+00:00",
+            "local_stage": "reviewed",
+        },
+        "DOCS-90": {"title": "Other instance", "url": "https://else.example.org/browse/DOCS-90"},
+    })
+    snapshot = {
+        "brief_id": "first",
+        "collected_at": "2026-11-12T08:00:00+00:00",
+        "source_status": {"jira": JIRA_SOURCE},
+    }
+    with patch.object(workflow, "jira_status", return_value={"jira_verification": "unavailable"}):
+        assert workflow.refresh_work({}, snapshot)[0] == []
+    verified = {
+        "jira_verification": "verified",
+        "jira_status": "In Progress",
+        "jira_status_category": "indeterminate",
+    }
+    with patch.object(workflow, "jira_status", return_value=verified) as check:
+        rows, _, _ = workflow.refresh_work({}, snapshot)
+        assert len(rows) == 1
+        assert rows[0]["local_stage"] == "reviewed"
+        assert rows[0]["work_id"] == workflow.memory.work_id(scope, key)
+        assert rows[0]["recent_history"][0]["kind"] == "imported"
+        check.assert_called_once_with({}, JIRA, key)
+        snapshot["source_status"]["jira"] = {**JIRA_SOURCE, "scope": "other-account"}
+        assert workflow.refresh_work({}, snapshot)[0] == []
+        assert check.call_count == 1

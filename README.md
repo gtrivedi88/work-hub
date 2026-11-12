@@ -46,9 +46,15 @@ Claude checks which sources are healthy, groups related signals, presents priori
 
 Your normal corrections and clear preferences can update `persona.md`, a project file, a stage checklist, or memory through `/work-hub:personalize-workflow`. The plugin nudges this on corrections. The personal files are deliberately small and should evolve as you work.
 
-### Next-day continuity
+### Pick up where you left off
 
-When you choose a Jira issue, Work Hub records its key and local workflow stage in `~/.claude/work-hub/cache/tracked-jira.json`. The next brief rechecks that issue directly in Jira, even if it no longer appears in an open-work query. It can report that Jira is now in the Done category, while keeping the local draft stage separate. It also compares the new intake snapshot with `cache/latest-snapshot.json` and reports newly visible work, status changes, and items no longer visible. It makes those comparisons only for sources with complete coverage in both runs; a capped or failed query cannot prove that something appeared or disappeared. The first run establishes the baseline. Both cache files remain local and private; Work Hub does not update Jira to mark work complete.
+Work Hub keeps a private history for each Jira ticket under the authenticated Jira account. On the next brief it rechecks selected tickets even when they are absent from the open list. It shows the last local draft stage, a saved next action, and verified changes to Jira and confirmed GitHub PRs or GitLab MRs. Selecting the same ticket again keeps the saved stage and next action.
+
+For example, you can ask Work Hub to remember that a draft is ready for a flag-name check and wait for the implementation MR to merge. On a later brief, Work Hub can verify the merge directly and bring the draft back with the saved next action. You can set a check date for a wait as well. If a dependency cannot be verified, the brief reports its status as unknown. A closed review without a merge is shown separately.
+
+For Jira options, Work Hub records why it recommended the work, along with any explicit deferral and later action. It can report whether you picked up or drafted the work, and can record a verified docs merge or publication when there is a source link. Jira completion, implementation review status, and the documentation outcome each have their own evidence.
+
+Work Hub compares intake snapshots only when the same account and source had complete coverage in both runs. The first successful run after a change of account or an upgrade from an unscoped snapshot establishes a baseline.
 
 ## What it collects
 
@@ -56,7 +62,7 @@ The bundled Python script reads assigned, watched, and reported Jira issues acro
 
 ## Upgrade and privacy
 
-`claude plugin marketplace update gtrivedi88-work-hub` refreshes the catalog; update the installed plugin through Claude Code's plugin manager. Your `~/.claude/work-hub` Markdown files and existing `.env` stay local. Work Hub stores the latest intake snapshot and selected Jira tracking under `~/.claude/work-hub/cache/` with private permissions. Delete either cache file whenever you want to reset that history. Review the repository code before installing, especially the SessionStart hook that writes to your home directory.
+`claude plugin marketplace update gtrivedi88-work-hub` refreshes the catalog; update the installed plugin through Claude Code's plugin manager. Your `~/.claude/work-hub` Markdown files and existing `.env` stay local. Work Hub stores the latest intake in `~/.claude/work-hub/cache/latest-snapshot.json` and work history in `work-history.sqlite3` in the same private directory. If you have a legacy `tracked-jira.json`, the first successful verification of a matching issue on the original Jira instance imports its saved stage. Remove the snapshot to reset intake comparisons. To reset work history, remove the database and any legacy tracking file. Review the repository code before installing, especially the SessionStart hook that writes to your home directory.
 
 ## Development
 
