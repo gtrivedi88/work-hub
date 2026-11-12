@@ -1,8 +1,8 @@
 {
   "name": "work-hub",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "Apache-2.0",
-  "description": "Personal work intake and evolving context for writers using existing Claude Code documentation plugins",
+  "description": "Personal tracking, connected work briefs, and documentation workflow handoff",
   "author": {
     "name": "Gaurav Trivedi"
   }

@@ -29,6 +29,8 @@ On repeat runs, lead with `tracked_jira_work` and `changes_since_previous`. For 
 
 For a saved wait, `dependency_status: ready` means Jira verified the dependency is Done or the review API verified the merge. `check_due: true` means the writer's check date arrived. A closed review without a merge needs a decision. An unknown dependency status means it could not be verified. Resurface actionable waits in NEXT or DECIDE with the source and next action. Honor explicitly deferred items until the writer selects them or new evidence materially changes the recommendation. The recommendation counts reflect recorded decisions and milestones for recommended Jira issues.
 
+Include relevant items from `tracker.today`, `tracker.inbox`, `tracker.waiting`, `tracker.agenda`, and `tracker.notifications`. Group tracker items with Jira, GitHub, or GitLab context when they share an exact URL or verified relationship. Keep the item's ID for later updates. If the writer chooses a standalone item, use the installed `work-hub:tracker` skill to pick it up. A tracker brief remains useful when every external source is missing.
+
 ## Build the brief
 
 Use current evidence to group Jira issues with linked GitLab MRs or GitHub PRs only when keys or URLs support the relation. Inspect Slack mentions, threads, and decisions through the connected Slack MCP when available; use AEM MCP for relevant published state. If an MCP connection is unavailable, state that. Bound MCP inspection to workstreams likely to change the next action and note the time window.

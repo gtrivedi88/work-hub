@@ -23,12 +23,20 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from types import SimpleNamespace
 from pathlib import Path
 
 import work_memory as memory
 
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
+TRACKER_SCRIPTS = SKILL_ROOT.parent / "tracker/scripts"
+sys.path.insert(0, str(TRACKER_SCRIPTS))
+try:
+    from work_tracker.tls import certificate_failure, https_context
+finally:
+    sys.path.pop(0)
+
 DEFAULTS = SKILL_ROOT / "defaults"
 KEY = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 ENV_KEYS = {
@@ -175,7 +183,7 @@ def config_diagnostics(cwd: Path) -> dict:
     setup = None
     if not any(f["scope"] in ("global", "active_directory") for f in files):
         setup = {
-            "message": "No docs-tools-compatible .env found. Create the global file for use across projects, or the active project's file for project-only use.",
+            "message": "No docs-tools-compatible .env found. For connected sources, create the global file for use across projects, or the active project's file for project-only use.",
             "recommended_file": str(global_file),
             "alternative_file": str(project_file),
             "format": "KEY=value",
@@ -203,14 +211,15 @@ def request_json(url: str, headers: dict[str, str], *, data: dict | None = None)
         headers={"Accept": "application/json", **headers},
     )
     try:
-        with urllib.request.urlopen(request, timeout=25) as response:
+        with urllib.request.urlopen(request, timeout=25, context=https_context()) as response:
             return json.load(response)
     except urllib.error.HTTPError as exc:
         path = urllib.parse.urlsplit(url).path
         raise IntakeError(f"HTTP {exc.code} for {path}") from None
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
         path = urllib.parse.urlsplit(url).path
-        raise IntakeError(f"Request failed for {path}: {type(exc).__name__}") from None
+        reason = "TLS certificate verification failed" if certificate_failure(exc) else type(exc).__name__
+        raise IntakeError(f"Request failed for {path}: {reason}") from None
 
 
 def jira_headers(config: dict[str, str]) -> dict[str, str]:
@@ -977,7 +986,33 @@ def save_snapshot(snapshot: dict) -> None:
         private_json(path, snapshot)
 
 
-def make_brief(cwd: Path, cap: int) -> dict:
+def tracker_context(config, snapshot, tracked, workspace=None) -> dict:
+    from work_tracker import agenda, connected, sources, views
+    from work_tracker.store import Store, TrackerError
+
+    try:
+        store = Store(workspace or os.environ.get("WORK_HUB_WORKSPACE", "work"))
+        connected.mirror_docs(store, snapshot, tracked)
+        provider = SimpleNamespace(
+            KEY=KEY, jira_status=jira_status, request_json=request_json, IntakeError=IntakeError,
+        )
+        connected.sync(store, provider, config, snapshot)
+        sources.poll(store, reminders_only=True)
+        schedule = agenda.agenda(store, days=1)
+        return {
+            "workspace": store.workspace,
+            "today": views.query(store, "today")[:20],
+            "inbox": views.query(store, "inbox")[:20],
+            "waiting": views.query(store, "waiting")[:20],
+            "agenda": schedule["calendar_events"][:20],
+            "calendar_errors": schedule["calendar_errors"],
+            "notifications": store.notifications()[:20],
+        }
+    except (TrackerError, OSError, sqlite3.Error, ValueError) as exc:
+        return {"error": str(exc)}
+
+
+def make_brief(cwd: Path, cap: int, *, tracker_workspace: str | None = None) -> dict:
     config = load_config(cwd)
     path = snapshot_path()
     previous = read_private_json(path, {})
@@ -1006,6 +1041,7 @@ def make_brief(cwd: Path, cap: int) -> dict:
         "changes_since_previous": changes,
         "tracked_jira_work": tracked_status,
         "recommendation_outcomes": recommendations,
+        "tracker": tracker_context(config, snapshot, tracked_status, tracker_workspace),
         "config": diagnostics,
         "candidate_items": candidates,
         "candidate_limit": 60,

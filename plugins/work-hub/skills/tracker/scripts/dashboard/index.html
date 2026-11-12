@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Work Hub</title>
+  <link rel="stylesheet" href="/app.css">
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="Work Hub home"><span class="mark" aria-hidden="true">W</span> Work Hub</a>
+    <span id="workspace" class="workspace"></span>
+    <nav id="navigation" aria-label="Tracker views"></nav>
+    <nav class="secondary" aria-label="Reports">
+      <button type="button" data-special="agenda">Agenda</button>
+      <button type="button" data-special="review">Weekly review</button>
+      <button type="button" data-special="notifications">Notifications</button>
+    </nav>
+  </aside>
+  <main>
+    <header class="top">
+      <div><p class="date" id="date"></p><h1 id="heading">Inbox</h1></div>
+      <label class="search"><span class="sr-only">Search tracked items</span><input id="search" type="search" placeholder="Search tracked items"></label>
+    </header>
+    <form id="capture" class="capture">
+      <label class="sr-only" for="title">Item title</label>
+      <input id="title" name="title" placeholder="Capture a task…" maxlength="240" required>
+      <label class="sr-only" for="kind">Item type</label>
+      <select id="kind" name="kind" aria-label="Item type">
+        <option value="task">Task</option><option value="habit">Habit</option>
+        <option value="project">Project</option><option value="milestone">Milestone</option>
+        <option value="checklist">Checklist</option>
+      </select>
+      <label class="sr-only" for="due">Due date</label>
+      <input id="due" name="due" type="date" aria-label="Due date">
+      <button class="primary" type="submit">Add item</button>
+    </form>
+    <p id="message" role="status" aria-live="polite"></p>
+    <div id="toolbar" class="toolbar"><span id="count"></span><button type="button" id="layout">Board view</button></div>
+    <section id="content" aria-live="polite" aria-label="Current view"></section>
+  </main>
+  <dialog id="details">
+    <form method="dialog"><button class="close" aria-label="Close details">Close</button></form>
+    <div id="detail-content"></div>
+  </dialog>
+</body>
+</html>
