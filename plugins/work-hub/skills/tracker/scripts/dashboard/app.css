@@ -67,3 +67,30 @@ dialog a { color: var(--accent); }
   .top { align-items: stretch; flex-direction: column; }
   .search input { width: 100%; }
 }
+.card { border-inline-start: 4px solid var(--item-color, #9aa99e); }
+[data-color="blue"] { --item-color: #4074be; --item-tint: #eaf0fc; }
+[data-color="teal"] { --item-color: #16847d; --item-tint: #e0f4ef; }
+[data-color="green"] { --item-color: #368252; --item-tint: #e5f3e8; }
+[data-color="amber"] { --item-color: #a96512; --item-tint: #fff2d8; }
+[data-color="red"] { --item-color: #b94d46; --item-tint: #fce9e7; }
+[data-color="purple"] { --item-color: #8457ab; --item-tint: #f3eafa; }
+.badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.badge { background: var(--item-tint, #edf1e8); padding: 2px 8px; border-radius: 20px; font-size: 12px; }
+.badge[data-tone="urgent"] { background: #fce9e7; color: #842d29; }
+.badge[data-tone="waiting"] { background: #fff2d8; color: #754709; }
+.badge[data-tone="done"] { background: #e5f3e8; color: #245c39; }
+.lane[data-lane="waiting"] { background: #f8efdc; }
+.lane[data-lane="doing"] { background: #eaf0fc; }
+.lane[data-lane="done"] { background: #e5f3e8; }
+.repeat-control { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.settings-form { display: grid; gap: 10px; margin-top: 14px; text-align: left; }
+dialog .settings-form { text-align: left; }
+.settings-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.settings-form label { display: grid; gap: 4px; font-size: 14px; }
+.settings-form input, .settings-form select { width: 100%; }
+.settings-form .primary { justify-self: start; }
+.error { color: #8e3d2a; overflow-wrap: anywhere; }
+.detail-list { margin: 8px 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.detail-list li { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.watch-form { background: white; padding: 14px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 14px; }
+@media (max-width: 440px) { .settings-grid { grid-template-columns: 1fr; } }

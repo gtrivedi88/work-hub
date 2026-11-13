@@ -168,9 +168,10 @@ def observe(watch: dict) -> tuple[object, str | None]:
 
 
 def poll(store: Store, *, force: bool = False, clock: dt.datetime | None = None,
-         reminders_only: bool = False) -> list[dict]:
+         reminders_only: bool = False, watch_id: str | None = None) -> list[dict]:
     at = clock or now()
     stamp = timestamp(at)
+    store.refresh_habits(at.astimezone().date(), stamp)
     with store.db(write=True) as db:
         items = store.all(db)
         for item in items:
@@ -189,6 +190,8 @@ def poll(store: Store, *, force: bool = False, clock: dt.datetime | None = None,
         return checked
     for item in items:
         watch = item.get("watch")
+        if watch_id and item["id"] != watch_id:
+            continue
         if not watch or item["status"] in CLOSED | {"waiting"} or (item["snoozed_until"] or "") > stamp:
             continue
         last = watch.get("checked_at")

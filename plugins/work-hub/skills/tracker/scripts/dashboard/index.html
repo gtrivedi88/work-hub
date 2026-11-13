@@ -13,6 +13,7 @@
     <span id="workspace" class="workspace"></span>
     <nav id="navigation" aria-label="Tracker views"></nav>
     <nav class="secondary" aria-label="Reports">
+      <button type="button" data-special="watches">Watches</button>
       <button type="button" data-special="agenda">Agenda</button>
       <button type="button" data-special="review">Weekly review</button>
       <button type="button" data-special="notifications">Notifications</button>
@@ -35,11 +36,28 @@
       <label class="sr-only" for="due">Due date</label>
       <input id="due" name="due" type="date" aria-label="Due date">
       <button class="primary" type="submit">Add item</button>
+      <label class="repeat-control" id="repeat-control" hidden>Repeat
+        <select name="repeat"><option value="">Never</option><option value="daily">Daily</option>
+          <option value="weekdays">Weekdays</option><option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option><option value="yearly">Yearly</option></select>
+      </label>
     </form>
     <p id="message" role="status" aria-live="polite"></p>
-    <div id="toolbar" class="toolbar"><span id="count"></span><button type="button" id="layout">Board view</button></div>
+    <div id="toolbar" class="toolbar"><span id="count"></span><div><button type="button" id="save-view">Saved views</button><button type="button" id="layout">Board view</button></div></div>
     <section id="content" aria-live="polite" aria-label="Current view"></section>
   </main>
+  <dialog id="view-dialog">
+    <form method="dialog"><button class="close">Close</button></form>
+    <h2>Saved views</h2>
+    <form id="view-form" class="settings-form">
+      <label>Name <input name="name" required maxlength="80"></label>
+      <label>Search <input name="q"></label>
+      <div class="settings-grid" id="view-filters"></div>
+      <button class="primary">Save view</button>
+      <button class="close" id="remove-view" type="button" hidden>Remove this view</button>
+    </form>
+    <p id="view-error" class="error" role="status"></p>
+  </dialog>
   <dialog id="details">
     <form method="dialog"><button class="close" aria-label="Close details">Close</button></form>
     <div id="detail-content"></div>

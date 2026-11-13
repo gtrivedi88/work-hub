@@ -7,7 +7,7 @@ import datetime as dt
 import io
 import json
 
-from .store import CLOSED, KINDS, SOURCES, STATES, Store, TrackerError, local_today, now, parse_date
+from .store import CLOSED, COLORS, KINDS, SOURCES, STATES, Store, TrackerError, local_today, now, parse_date
 
 BUILTIN = {
     "inbox": {"status": "inbox"},
@@ -21,7 +21,7 @@ BUILTIN = {
 
 def validate_filters(filters: dict) -> dict:
     choices = {"status": (*STATES, "all"), "kind": KINDS, "source": SOURCES,
-               "due": ("today", "overdue", "upcoming"), "layout": ("list", "board")}
+               "due": ("today", "overdue", "upcoming"), "layout": ("list", "board"), "color": COLORS}
     allowed = set(choices) | {"q", "tag", "parent", "waiting", "snoozed"}
     for key, value in filters.items():
         if key not in allowed or (key in choices and value not in choices[key]):
@@ -41,6 +41,7 @@ def save_view(store: Store, name: str, filters: dict):
 
 
 def query(store: Store, view: str | None = None, **overrides) -> list[dict]:
+    store.refresh_habits()
     with store.db() as db:
         filters = {}
         if view:
@@ -79,6 +80,8 @@ def query_db(store: Store, db, filters: dict) -> list[dict]:
         if not filters.get("snoozed") and not filters.get("q") and (item["snoozed_until"] or "") > current:
             continue
         if any(item[key] != filters[key] for key in ("kind", "source", "parent") if key in filters):
+            continue
+        if filters.get("color") and (item.get("color") or "default") != filters["color"]:
             continue
         if filters.get("tag") and filters["tag"].lower() not in item["tags"]:
             continue
@@ -150,6 +153,7 @@ def review(store: Store, since: str | None = None) -> dict:
     start = parse_date(since) if since else local_today() - dt.timedelta(days=6)
     if start > local_today():
         raise TrackerError("Review start must be today or earlier.")
+    store.refresh_habits()
     cutoff = dt.datetime.combine(start, dt.time.min).astimezone(dt.timezone.utc).isoformat()
     with store.db() as db:
         items = query_db(store, db, BUILTIN["all"])
@@ -186,6 +190,11 @@ def review(store: Store, since: str | None = None) -> dict:
             totals["due"] += 1
             totals["done"] += item["status"] == "done"
     return {
+        "missed_habit_check_ins": sum(
+            item["kind"] == "habit" and item.get("missed", False)
+            and start.isoformat() <= item["due"] <= local_today().isoformat()
+            for item in items
+        ),
         "since": start.isoformat(), "through": local_today().isoformat(),
         "completed": completed, "time_by_item": work, "active_timer": dict(active) if active else None,
         "actual_minutes": sum(spent.values()),

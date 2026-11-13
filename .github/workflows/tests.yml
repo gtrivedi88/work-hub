@@ -1,0 +1,26 @@
+name: Work Hub checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ['3.9', '3.13']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install 'pytest>=8,<9'
+      - run: python -m pytest -q
+      - run: node --check plugins/work-hub/skills/tracker/scripts/dashboard/app.js
+      - run: python -m compileall -q plugins/work-hub

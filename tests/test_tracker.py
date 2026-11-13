@@ -268,3 +268,113 @@ def test_brief_without_env_shows_local_items_and_exact_setup_paths(store, tmp_pa
     assert setup["keys_by_source"]["jira"] == ["JIRA_URL", "JIRA_EMAIL", "JIRA_API_TOKEN"]
     assert not (fake_home / ".env").exists()
     assert not (project / ".env").exists()
+
+
+def test_elapsed_habits_are_recorded_once_and_can_be_backfilled(store):
+    today = local_today()
+    start = today - dt.timedelta(days=4)
+    item = store.add("Daily practice", kind="habit", due=start.isoformat(), repeat="daily", color="teal")
+    current = views.query(store, "today", color="teal")
+    assert [record["due"] for record in current] == [today.isoformat()]
+    assert views.review(store)["habits"] == [{"title": "Daily practice", "due": 5, "done": 0}]
+    assert views.review(store)["missed_habit_check_ins"] == 4
+    assert len(views.query(store, "all")) == 5
+    assert store.history(item["id"])["history"][-1]["kind"] == "missed"
+    store.set_status(item["id"], "done")
+    assert views.review(store)["habits"][0]["done"] == 1
+    assert views.review(store)["missed_habit_check_ins"] == 3
+    assert len(views.query(store, "all")) == 5
+
+
+def test_reminder_and_missed_intervals_survive_worker_restart(store, monkeypatch):
+    from work_tracker import service
+
+    at = now()
+    monkeypatch.setattr(service, "now", lambda: at)
+    monkeypatch.setattr(sources, "now", lambda: at)
+    store.add("Check launch", remind=(at - dt.timedelta(minutes=1)).isoformat())
+    delivered = []
+    monkeypatch.setattr(sources, "desktop_notification", lambda message: delivered.append(message) or True)
+    initial = service.tick(store, interval=300, desktop=True, refresh=False)
+    assert initial["last_success_at"] and initial["missed_total"] == 0
+    assert delivered == ["Reminder: Check launch"]
+    at += dt.timedelta(minutes=20)
+    latest = service.tick(Store(path=store.path), interval=300, desktop=True, refresh=False)
+    assert latest["missed_last_run"] == 3
+    assert latest["missed_total"] == 3
+    assert delivered == ["Reminder: Check launch"]
+    assert service.manage(store, "status")["missed_total"] == 3
+    with service.run_lock(store) as locked:
+        assert locked
+        assert service.tick(store, interval=300, desktop=True, refresh=False) == {"running": True}
+
+
+def test_login_agent_has_isolated_profile_and_correct_command(store, tmp_path, monkeypatch):
+    import plistlib
+    from work_tracker import service
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(service.sys, "platform", "darwin")
+    calls = []
+    monkeypatch.setattr(service, "launchctl", lambda *args, **kw: calls.append(args) or True)
+    assert service.manage(store, "enable", interval=300, desktop=True, refresh=True)["installed"]
+    path = service.agent_path(store)
+    definition = plistlib.loads(path.read_bytes())
+    assert definition["RunAtLoad"] and definition["StartInterval"] == 300
+    assert definition["ProgramArguments"][-4:] == ["--interval", "300", "--desktop", "--connected"]
+    assert definition["EnvironmentVariables"]["PERSONAL_WORKFLOW_HOME"] == str(store.path.parent.parent.resolve())
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert service.manage(store, "status")["loaded"]
+    service.manage(store, "disable")
+    assert not path.exists()
+    assert [call[0] for call in calls] == ["bootstrap", "print", "bootout"]
+
+
+def test_backup_restore_preserves_both_databases_and_omits_secrets(store, tmp_path):
+    from work_tracker import backup
+    import zipfile
+
+    workflow = connected.workflow_module()
+    root = store.path.parent.parent
+    item = store.add("Fix docs", color="purple")
+    store.log_time(item["id"], 30)
+    views.save_view(store, "purple tasks", {"color": "purple"})
+    with workflow.memory.database(workflow.tracked_path(), write=True) as db:
+        workflow.memory.save(db, "example-account", {"key": "DOCS-12", "next_action": "Check examples"})
+    (root / ".env").write_text("GITHUB_TOKEN=fixture\n")
+    (root / "persona.md").write_text("Use short headings.")
+    workflow.snapshot_path().write_text('{"private":"transient intake"}')
+    archive = tmp_path / "backup.zip"
+    assert backup.create(archive)["files"] == 3
+    assert archive.stat().st_mode & 0o777 == 0o600
+    with zipfile.ZipFile(archive) as file:
+        assert set(file.namelist()) == {
+            "manifest.json", "persona.md", "cache/tracker.sqlite3", "cache/work-history.sqlite3",
+        }
+    target = tmp_path / "restored"
+    backup.restore(archive, target)
+    restored = Store(path=target / "cache/tracker.sqlite3")
+    assert views.query(restored, "purple tasks")[0]["id"] == item["id"]
+    assert views.review(restored)["actual_minutes"] == 30
+    with workflow.memory.database(target / "cache/work-history.sqlite3") as db:
+        assert workflow.memory.read(db, "example-account", "DOCS-12")["next_action"] == "Check examples"
+    assert (target / "persona.md").read_text() == "Use short headings."
+    assert not (target / ".env").exists()
+    with pytest.raises(FileExistsError):
+        backup.restore(archive, target)
+
+
+def test_restore_rejects_corruption_and_path_traversal(tmp_path):
+    import zipfile
+    from work_tracker import backup
+
+    for name, contents in (("../unsafe.md", "unexpected"), ("cache/tracker.sqlite3", "corrupt")):
+        archive = tmp_path / "invalid.zip"
+        with zipfile.ZipFile(archive, "w") as file:
+            file.writestr("manifest.json", '{"format":1}')
+            file.writestr(name, contents)
+        target = tmp_path / "restored"
+        with pytest.raises((TrackerError, backup.sqlite3.DatabaseError)):
+            backup.restore(archive, target)
+        assert not target.exists()
+    assert not (tmp_path / "unsafe.md").exists()

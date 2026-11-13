@@ -12,8 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import agenda, views
-from .store import Store, TrackerError
+from . import agenda, service, sources, views
+from .store import COLORS, KINDS, SOURCES, STATES, Store, TrackerError
 
 ASSETS = Path(__file__).resolve().parents[1] / "dashboard"
 STATIC = {
@@ -101,10 +101,16 @@ def dashboard_server(store: Store, port: int = 0):
 
         def read_data(self, path, params):
             if path == "/api/config":
-                return {"workspace": store.workspace,
+                return {"workspace": store.workspace, "colors": COLORS, "kinds": KINDS,
+                        "states": STATES, "sources": SOURCES,
+                        "watch_types": sources.WATCH_TYPES,
                         "views": {**views.BUILTIN, **store.settings("view")}}
             if path == "/api/items":
-                return views.query(store, params.get("view"), **{key: params[key] for key in ("q",) if key in params})
+                filters = {key: value for key, value in params.items() if key != "view"}
+                for key in ("waiting", "snoozed"):
+                    if key in filters:
+                        filters[key] = filters[key] == "true"
+                return views.query(store, params.get("view"), **filters)
             if path == "/api/history":
                 return store.history(params["id"])
             if path == "/api/agenda":
@@ -113,16 +119,50 @@ def dashboard_server(store: Store, port: int = 0):
                 return views.review(store)
             if path == "/api/notifications":
                 return store.notifications()
+            if path == "/api/service":
+                return service.manage(store, "status")
             return None
 
         def write_data(self, path, data):
             if path == "/api/items":
-                allowed = {"title", "description", "kind", "due", "next_action"}
+                allowed = {"title", "description", "kind", "due", "next_action", "color",
+                           "repeat", "remind", "scheduled"}
                 if set(data) - allowed:
                     raise TrackerError("Unsupported capture field.")
                 return store.add(**data)
+            if path == "/api/edit":
+                item_id = data.pop("id")
+                return store.edit(item_id, **data)
             if path == "/api/status":
                 return store.set_status(data["id"], data["status"])
+            if path == "/api/dependencies":
+                action = data["action"]
+                if action not in ("add", "remove"):
+                    raise TrackerError("Choose whether to add or remove the dependency.")
+                operation = store.depend if action == "add" else store.undepend
+                operation(data["id"], data["target"])
+                return {"action": action}
+            if path == "/api/views":
+                if data.get("action") == "remove":
+                    if data["name"] in views.BUILTIN:
+                        raise TrackerError("Built-in views cannot be removed.")
+                    store.remove_setting("view", data["name"])
+                else:
+                    views.save_view(store, data["name"], data["filters"])
+                return {"name": data["name"]}
+            if path == "/api/watches":
+                if data.get("action") == "add":
+                    return sources.add_watch(
+                        store, data["title"], data["target"], kind=data["kind"],
+                        contains=data.get("contains"), every=data["every"],
+                    )
+                if store.history(data["id"])["item"]["kind"] != "watch":
+                    raise TrackerError("Select a watch.")
+                if data["action"] == "check":
+                    return {"checked": sources.poll(store, force=True, watch_id=data["id"])}
+                if data["action"] in ("pause", "resume"):
+                    return store.set_status(data["id"], "waiting" if data["action"] == "pause" else "todo")
+                raise TrackerError("Choose a watch action.")
             if path == "/api/notifications":
                 sequence = data["sequence"]
                 if type(sequence) is not int:

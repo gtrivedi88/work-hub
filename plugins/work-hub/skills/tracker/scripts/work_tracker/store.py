@@ -17,6 +17,7 @@ KINDS = ("task", "habit", "project", "milestone", "checklist", "watch")
 STATES = ("inbox", "todo", "doing", "waiting", "done", "skipped", "canceled")
 CLOSED = {"done", "skipped", "canceled"}
 SOURCES = ("manual", "email", "slack", "meeting", "markdown", "jira", "github", "gitlab", "web", "radar")
+COLORS = ("default", "blue", "teal", "green", "amber", "red", "purple")
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
@@ -204,7 +205,7 @@ class Store:
     def insert(self, db, title: str, *, kind="task", source="manual", url=None,
                description=None, next_action=None, due=None, scheduled=None, remind=None,
                repeat=None, parent=None, tags=(), estimate=None, origin=None, connection=None,
-               watch=None, reference=None) -> dict:
+               watch=None, reference=None, color=None) -> dict:
         if kind not in KINDS or source not in SOURCES:
             raise TrackerError("Unknown item type or source.")
         if (kind == "watch") != (watch is not None):
@@ -248,11 +249,12 @@ class Store:
             "url": url, "origin": origin, "description": "", "next_action": "", "tags": [],
             "parent": parent, "due": None, "scheduled": None, "remind_at": None,
             "snoozed_until": None, "estimate_minutes": None, "repeat": None,
-            "connection": connection, "created_at": at, "updated_at": at,
+            "connection": connection, "created_at": at, "updated_at": at, "color": "default",
         }
         fields = {
             "description": description, "next_action": next_action, "due": due,
             "scheduled": scheduled, "remind": remind, "tags": list(tags), "estimate": estimate,
+            "color": color,
         }
         self.apply_fields(item, {key: value for key, value in fields.items() if value is not None})
         if repeat:
@@ -284,6 +286,10 @@ class Store:
                 if not isinstance(value, list) or len(value) > 30:
                     raise TrackerError("Provide up to 30 tags.")
                 item[key] = sorted({validate_text(tag, "Tag", 50).lower() for tag in value})
+            elif key == "color":
+                if value not in COLORS:
+                    raise TrackerError("Choose a supported item color.")
+                item["color"] = value
             elif key == "estimate":
                 if value is not None and (type(value) is not int or value < 1):
                     raise TrackerError("Estimated minutes must be a positive integer.")
@@ -299,8 +305,9 @@ class Store:
             if item.get("repeat"):
                 if not item["due"]:
                     raise TrackerError("Repeating items need a due date.")
-                if item["due"] != previous["due"]:
-                    item["occurrence"] = item["due"]
+                # A reschedule changes the deadline, but retains the series slot.
+                if item["due"] != previous["due"] and item.get("missed"):
+                    raise TrackerError("Record a missed occurrence as done or skipped.")
             changes = {key: value for key, value in item.items() if value != previous.get(key)}
             if changes:
                 item["updated_at"] = timestamp()
@@ -315,8 +322,10 @@ class Store:
             item = self.get(db, item_id)
             if item["status"] == status:
                 return {"item": item, "next_occurrence": None}
+            if item.get("missed") and status not in {"done", "skipped", "canceled"}:
+                raise TrackerError("Record a past occurrence as done or skipped.")
             at = timestamp()
-            item.update(status=status, updated_at=at, closed_at=at if status in CLOSED else None)
+            item.update(missed=False, status=status, updated_at=at, closed_at=at if status in CLOSED else None)
             self.save(db, item)
             self.event(db, item_id, "status", {"status": status}, at)
             if status in CLOSED:
@@ -329,13 +338,38 @@ class Store:
                     minutes = max(1, round((end - dt.datetime.fromisoformat(timer["started"])).total_seconds() / 60))
                     self.end_timer(db, timer["id"], item_id, end, minutes)
             successor = self.repeat_item(db, item) if status in {"done", "skipped"} else None
+            if successor and item["kind"] == "habit":
+                successor = self.advance_series(db, successor, local_today(), at)
             return {"item": item, "next_occurrence": successor}
+
+    def advance_series(self, db, item: dict, today: dt.date, at: str) -> dict:
+        """Record elapsed dates and return the current or next occurrence."""
+        while item["status"] not in CLOSED and parse_date(item["due"]) < today:
+            item.update(status="skipped", missed=True, closed_at=at, updated_at=at)
+            self.save(db, item)
+            self.event(db, item["id"], "missed", {"due": item["due"]}, at)
+            item = self.repeat_item(db, item)
+        return item
+
+    def refresh_habits(self, today: dt.date | None = None, at: str | None = None):
+        today = today or local_today()
+        at = at or timestamp()
+        with self.db(write=True) as db:
+            active = db.execute(
+                "SELECT item FROM time_entries WHERE workspace=? AND ended IS NULL", (self.workspace,),
+            ).fetchone()
+            for item in self.all(db):
+                if (item["kind"] == "habit" and item.get("repeat")
+                        and item["status"] not in CLOSED and item["due"] < today.isoformat()
+                        and (not active or active["item"] != item["id"])):
+                    self.advance_series(db, item, today, at)
 
     def repeat_item(self, db, item: dict) -> dict | None:
         if not item.get("repeat"):
             return None
         previous_day = parse_date(item["due"])
-        day = next_occurrence(item["repeat"], previous_day, parse_date(item["anchor"]))
+        slot = parse_date(item.get("occurrence") or item["due"])
+        day = next_occurrence(item["repeat"], slot, parse_date(item["anchor"]))
         existing = db.execute(
             "SELECT data FROM items WHERE workspace=? AND series=? AND occurrence=?",
             (self.workspace, item["series"], day.isoformat()),
@@ -346,7 +380,7 @@ class Store:
         successor = {
             **item, "id": uuid.uuid4().hex[:12], "origin": None, "occurrence": day.isoformat(),
             "due": day.isoformat(), "status": "todo", "created_at": at, "updated_at": at,
-            "closed_at": None, "snoozed_until": None,
+            "closed_at": None, "snoozed_until": None, "missed": False,
         }
         if item["remind_at"]:
             original = dt.datetime.fromisoformat(item["remind_at"]).astimezone()
@@ -405,7 +439,12 @@ class Store:
                 "SELECT at,kind,data FROM events WHERE workspace=? AND item=? ORDER BY sequence",
                 (self.workspace, item_id),
             )
-            return {"item": item, "history": [
+            relations = db.execute(
+                "SELECT target FROM relations WHERE workspace=? AND item=? ORDER BY target",
+                (self.workspace, item_id),
+            )
+            dependencies = [self.get(db, row["target"]) for row in relations]
+            return {"item": item, "dependencies": dependencies, "history": [
                 {"at": row["at"], "kind": row["kind"], **json.loads(row["data"])} for row in rows
             ]}
 

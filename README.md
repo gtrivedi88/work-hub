@@ -28,18 +28,22 @@ python3 plugins/work-hub/skills/tracker/scripts/tracker.py --help
 python3 plugins/work-hub/skills/tracker/scripts/tracker.py dashboard
 ```
 
-Use `--workspace personal` before a command to work in a separate inbox. The default workspace is `work`. The dashboard opens a local browser view and prints its URL in the terminal. Keep the dashboard process running while you use it.
+Use `--workspace personal` before a command to work in a separate inbox. The default workspace is `work`. The dashboard opens a local browser view and prints its URL in the terminal. Open an item to edit dates, next actions, reminders, tags, and color or to manage dependencies. Use **Saved views** to keep filters and **Watches** to add, check, pause, or resume a watch. Status labels identify overdue, waiting, and completed work alongside the color cues. Keep the dashboard process running while you use it.
 
 | Track | Commands |
 | --- | --- |
 | Tasks and commitments | `add` for a quick entry, `capture` for a reviewed JSON batch, or `track` for a connected Jira, GitHub, or GitLab item. Capture from email, Slack, or meeting notes through a connected MCP tool or with the source permalink. |
 | Inbox and history | `list --view today`, `list --q`, `view save`, `history`, and `export` in JSON, CSV, Markdown, or iCalendar. |
 | Projects and releases | `add --kind project`, `--kind milestone`, `--parent`, `depend`, and `template save` / `template use` for reusable checklists. |
-| Habits and reminders | `add --kind habit --due YYYY-MM-DD --repeat weekdays`, `status ID done` or `skipped`, `--remind`, and `snooze`. Completing or skipping an occurrence creates the next one. |
+| Habits and reminders | `add --kind habit --due YYYY-MM-DD --repeat weekdays`, `status ID done` or `skipped`, `--remind`, and `snooze`. Completing or skipping an occurrence creates the next one. Habit dates that elapsed without a check-in appear as missed, and the current occurrence remains available. You can mark a missed date done or skipped from its history or the All view. |
 | Calendar and time | `calendar add NAME FILE-OR-URL`, `agenda`, `--scheduled`, `--estimate`, `time start`, `time stop`, `time log`, and `review`. |
 | Watches | `watch add TITLE TARGET --type page\|feed\|release\|review\|radar`, `watch pause`, `watch resume`, and `watch list`. Use `--contains` for a keyword on supported watch types. |
 
 For scheduled checks between Claude sessions, leave `tracker.py run --desktop` running in a terminal. It checks due reminders and watches, records notifications locally, and attempts desktop delivery on macOS or Linux. Add `--connected` to refresh your signed-in Jira, GitHub, and GitLab items as well. `check` runs a single check, and `notifications list` shows unread alerts. A watch's first successful check establishes its baseline. GitHub release and PR watches use public URLs. For private reviews, use `track` on a review from your connected brief. A Radar watch reads the local `signal-bank.jsonl` file or a directory containing it.
+
+On macOS, opt in to background checks with `tracker.py service enable --desktop`. The login agent runs reminders and watches at the selected interval, with a five-minute default. Use `service status` or the dashboard's **Watches** view to check recent runs and missed intervals. Use `service disable` to remove the schedule. If you update the plugin, disable and enable the job again so it uses the new installed script. On other platforms, run the terminal worker.
+
+Back up the tracker, Jira history, and personal Markdown with `tracker.py backup create /path/to/work-hub.zip`. Restore and validate into a new directory with `tracker.py backup restore /path/to/work-hub.zip /path/to/new-profile`, then point `PERSONAL_WORKFLOW_HOME` at that directory. The archive contains private work data. It excludes credential files and the transient intake snapshot.
 
 Calendar sources can be local `.ics` files or HTTP(S) iCalendar feeds. The agenda handles all-day and timed events and common daily, weekly, monthly, and yearly recurrence rules. It reports unsupported rules and source errors. Use iCalendar export to transfer Work Hub deadlines and time blocks into another calendar.
 

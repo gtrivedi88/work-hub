@@ -8,10 +8,11 @@ import os
 import sqlite3
 import sys
 import time
+import zipfile
 from pathlib import Path
 
-from . import agenda, connected, sources, views
-from .store import KINDS, SOURCES, STATES, Store, TrackerError
+from . import agenda, backup, connected, service, sources, views
+from .store import COLORS, KINDS, SOURCES, STATES, Store, TrackerError
 
 
 def fields(parser, *, capture=False):
@@ -28,6 +29,7 @@ def fields(parser, *, capture=False):
         parser.add_argument("--" + field)
     parser.add_argument("--tag", action="append", dest="tags")
     parser.add_argument("--estimate", type=int, metavar="MINUTES")
+    parser.add_argument("--color", choices=COLORS)
 
 
 def filters(parser):
@@ -37,6 +39,7 @@ def filters(parser):
     parser.add_argument("--kind", choices=KINDS)
     parser.add_argument("--source", choices=SOURCES)
     parser.add_argument("--tag")
+    parser.add_argument("--color", choices=COLORS)
     parser.add_argument("--parent")
     parser.add_argument("--due", choices=("today", "overdue", "upcoming"))
     parser.add_argument("--layout", choices=("list", "board"))
@@ -126,6 +129,19 @@ def build_parser():
     worker.add_argument("--interval", type=int, default=60, metavar="SECONDS")
     worker.add_argument("--desktop", action="store_true")
     worker.add_argument("--connected", action="store_true")
+    scheduler = group(commands, "service", "Manage background checks at login")
+    for name in ("enable", "tick"):
+        operation = scheduler.add_parser(name)
+        operation.add_argument("--interval", type=int, default=300, metavar="SECONDS")
+        operation.add_argument("--desktop", action="store_true")
+        operation.add_argument("--connected", action="store_true")
+    scheduler.add_parser("disable")
+    scheduler.add_parser("status")
+    archives = group(commands, "backup", "Back up data or restore it into a new profile")
+    archives.add_parser("create").add_argument("file", type=Path)
+    restore = archives.add_parser("restore")
+    restore.add_argument("file", type=Path)
+    restore.add_argument("profile", type=Path)
     notifications = group(commands, "notifications", "Inspect or dismiss notifications")
     notifications.add_parser("list").add_argument("--all", action="store_true")
     notifications.add_parser("dismiss").add_argument("sequence", type=int, nargs="?")
@@ -149,7 +165,7 @@ def values(args, names):
 
 def selected_filters(args):
     return values(args, ("q", "status", "kind", "source", "tag", "parent", "due",
-                         "layout", "waiting", "snoozed"))
+                         "layout", "waiting", "snoozed", "color"))
 
 
 def check(store, args, *, force=False):
@@ -183,7 +199,7 @@ def run_worker(store, args):
 def dispatch(store, args):
     cmd = args.command
     action = getattr(args, "action", None)
-    common = ("description", "next_action", "due", "scheduled", "remind", "tags", "estimate")
+    common = ("description", "next_action", "due", "scheduled", "remind", "tags", "estimate", "color")
     if cmd == "add":
         return store.add(args.title, **values(args, (*common, "kind", "source", "url", "reference", "parent", "repeat")))
     if cmd == "edit":
@@ -242,6 +258,16 @@ def dispatch(store, args):
         return {"checked": check(store, args, force=args.force), "notifications": store.notifications()}
     if cmd == "run":
         return run_worker(store, args)
+    if cmd == "service":
+        if action in ("enable", "tick"):
+            if not 60 <= args.interval <= 86400:
+                raise TrackerError("Use an interval from 60 to 86400 seconds.")
+            if action == "tick":
+                return service.tick(store, interval=args.interval, desktop=args.desktop, refresh=args.connected)
+            return service.manage(store, action, interval=args.interval, desktop=args.desktop, refresh=args.connected)
+        return service.manage(store, action)
+    if cmd == "backup":
+        return backup.create(args.file) if action == "create" else backup.restore(args.file, args.profile)
     if cmd == "notifications":
         if action == "list":
             return store.notifications(seen=args.all)
@@ -274,6 +300,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except KeyboardInterrupt:
         return 0
-    except (TrackerError, OSError, ValueError, TypeError, sqlite3.Error) as exc:
+    except (TrackerError, OSError, ValueError, TypeError, KeyError, sqlite3.Error, zipfile.BadZipFile) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 1
