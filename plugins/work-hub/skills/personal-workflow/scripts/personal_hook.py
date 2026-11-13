@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Nudge personal learning after a correction without storing prompt text."""
 
+from __future__ import annotations
+
 import json
 import os
 import re
